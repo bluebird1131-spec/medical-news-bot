@@ -7,6 +7,8 @@ from datetime import datetime, timedelta, timezone
 import urllib3
 import os
 import time
+import re
+import xml.etree.ElementTree as ET
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -331,53 +333,24 @@ def collect_dailymedi():
 # [5] 청년의사
 # ==============================================================================
 def collect_docdocdoc():
-    print("\n🔍 [5/5 청년의사] 수집 시작...")
+    # 목록 페이지는 자바스크립트로 그려져 해외 서버에서 비어 보이므로 RSS(최근 약 50건, 2~3일치)로 수집
+    print("\n🔍 [5/5 청년의사] 수집 시작 (RSS)...")
     count = 0
-    page = 1
-    max_pages = MAX_PAGES
-
-    while page <= max_pages:
-        target_url = f"https://www.docdocdoc.co.kr/news/articleList.html?view_type=sm&page={page}"
-        url = get_bypass_url(target_url, render=True)
-        print(f"   -> {page}페이지 탐색 중...")
-
-        try:
-            res = fetch(url)
-            soup = BeautifulSoup(res.text, 'html.parser')
-            items = soup.select('#section-list > ul.type2 > li')
-            if not items:
-                print("   더 이상 게시물이 없습니다.")
-                break
-
-            reached_cutoff = False
-            for item in items:
-                byline = item.select('span.byline em')
-                if not byline: continue
-                raw_date = byline[-1].get_text(strip=True).split(' ')[0]
-                date_text = raw_date.replace('.', '-')
-
-                if len(date_text) == 10 and date_text.startswith("20"):
-                    if date_text < cutoff_date_str:
-                        reached_cutoff = True
-                        break
-
-                    title_tag = item.select_one('h4.titles a')
-                    if not title_tag: continue
-                    title = title_tag.get_text(strip=True)
-                    link = "https://www.docdocdoc.co.kr" + title_tag['href']
-                    if send_to_google_sheet(title, link, date_text, "청년의사") == "success":
-                        count += 1
-
-            if reached_cutoff:
-                print(f"   🏁 기준일({cutoff_date_str}) 도달 완료.")
-                break
-
-        except Exception as e:
-            print(f"   🚨 청년의사 {page}페이지 에러: {e}")
-            break
-
-        page += 1
-        time.sleep(1.5)
+    try:
+        res = fetch("https://www.docdocdoc.co.kr/rss/allArticle.xml")
+        items = ET.fromstring(res.content).iter('item')
+        for item in items:
+            date_text = (item.findtext('pubDate') or '').strip()[:10]
+            if not (len(date_text) == 10 and date_text.startswith("20")) or date_text < cutoff_date_str:
+                continue
+            title = (item.findtext('title') or '').strip()
+            m = re.search(r'idxno=(\d+)', item.findtext('link') or '')
+            if not title or not m: continue
+            link = f"https://www.docdocdoc.co.kr/news/articleView.html?idxno={m.group(1)}"
+            if send_to_google_sheet(title, link, date_text, "청년의사") == "success":
+                count += 1
+    except Exception as e:
+        print(f"   🚨 청년의사 RSS 에러: {e}")
 
     print(f"   👉 청년의사 신규 저장: {count}건")
     return count
