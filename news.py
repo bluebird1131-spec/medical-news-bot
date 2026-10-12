@@ -11,7 +11,10 @@ import time
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ==============================================================================
-# [환경 설정] - 1년 치(과거 365일) 과거 뉴스 수집 모드
+# [환경 설정] - 평소에는 최근 며칠치만 가볍게 수집
+#   COLLECT_DAYS : 며칠 전 기사까지 모을지 (기본 3일)
+#   MAX_PAGES    : 소스별로 몇 페이지까지 볼지 (기본 10페이지, 기준일에 닿으면 그 전에 멈춤)
+#   과거 기사를 보충하려면 Actions 의 Run workflow 에서 두 값을 크게 넣어 실행
 # ==============================================================================
 GOOGLE_SHEET_WEBHOOK_URL = os.environ.get("GOOGLE_SHEET_WEBHOOK_URL")  # 👈 구글 시트 웹앱 URL
 SCRAPER_API_KEY = os.environ.get("SCRAPER_API_KEY")                    # 👈 ScraperAPI 키
@@ -23,12 +26,14 @@ HEADERS = {
 now = datetime.now(timezone(timedelta(hours=9)))
 today_str = now.strftime('%Y-%m-%d')
 
-# 💡 1년 전 기준일 설정 (오늘로부터 365일 전)
-one_year_ago = now - timedelta(days=365)
-cutoff_date_str = one_year_ago.strftime('%Y-%m-%d')
+COLLECT_DAYS = int(os.environ.get("COLLECT_DAYS") or 3)
+MAX_PAGES = int(os.environ.get("MAX_PAGES") or 10)
+cutoff_date_str = (now - timedelta(days=COLLECT_DAYS)).strftime('%Y-%m-%d')
 
 print(f"✅ 수집 기준일: {today_str}")
-print(f"✅ 수집 대상 기간: {cutoff_date_str} ~ {today_str} (최근 1년 치)")
+print(f"✅ 수집 대상 기간: {cutoff_date_str} ~ {today_str} (최근 {COLLECT_DAYS}일, 소스별 최대 {MAX_PAGES}페이지)")
+if not SCRAPER_API_KEY:
+    print("⚠️ SCRAPER_API_KEY 가 없습니다. 데일리메디·청년의사는 해외(GitHub) 서버에서 바로 접속하면 막혀 수집되지 않습니다.")
 print("=" * 65)
 
 
@@ -84,14 +89,27 @@ def get_bypass_url(target_url, render=False, country=None):
     return bypass_url
 
 
+def fetch(url, tries=3):
+    for i in range(tries):
+        try:
+            res = requests.get(url, timeout=90, verify=False)
+            if res.status_code == 200:
+                return res
+            print(f"   ⚠️ HTTP {res.status_code} ({i + 1}/{tries})")
+        except Exception as e:
+            print(f"   ⚠️ 접속 실패 ({i + 1}/{tries}): {str(e)[:120]}")
+        time.sleep(5 * (i + 1) ** 2)
+    raise RuntimeError("여러 번 시도했지만 페이지를 받지 못했습니다")
+
+
 # ==============================================================================
-# [1] 보건복지부 [보도자료] 1년 치 수집 (신규 추가: bid=0027)
+# [1] 보건복지부 [보도자료] (bid=0027)
 # ==============================================================================
 def collect_mohw_press():
-    print("\n🔍 [1/5 보건복지부 보도자료] 1년 치 수집 시작...")
+    print("\n🔍 [1/5 보건복지부 보도자료] 수집 시작...")
     count = 0
     page = 1
-    max_pages = 100
+    max_pages = MAX_PAGES
 
     while page <= max_pages:
         target_url = f"https://www.mohw.go.kr/board.es?mid=a10503010100&bid=0027&nPage={page}"
@@ -99,7 +117,7 @@ def collect_mohw_press():
         print(f"   -> {page}페이지 탐색 중...")
 
         try:
-            res = requests.get(url, verify=False, timeout=90)
+            res = fetch(url)
             soup = BeautifulSoup(res.text, 'html.parser')
             rows = soup.select('table.tstyle_list tbody tr')
             if not rows:
@@ -127,7 +145,7 @@ def collect_mohw_press():
                         count += 1
 
             if reached_cutoff:
-                print(f"   🏁 1년 전 기준일({cutoff_date_str}) 도달 완료.")
+                print(f"   🏁 기준일({cutoff_date_str}) 도달 완료.")
                 break
 
         except Exception as e:
@@ -135,20 +153,20 @@ def collect_mohw_press():
             break
 
         page += 1
-        time.sleep(0.5)
+        time.sleep(1.5)
 
     print(f"   👉 보건복지부(보도자료) 신규 저장: {count}건")
     return count
 
 
 # ==============================================================================
-# [2] 보건복지부 [공지사항] 1년 치 수집 (기존 유지: bid=0003)
+# [2] 보건복지부 [공지사항] (bid=0003)
 # ==============================================================================
 def collect_mohw_notice():
-    print("\n🔍 [2/5 보건복지부 공지사항] 1년 치 수집 시작...")
+    print("\n🔍 [2/5 보건복지부 공지사항] 수집 시작...")
     count = 0
     page = 1
-    max_pages = 100
+    max_pages = MAX_PAGES
 
     while page <= max_pages:
         target_url = f"https://www.mohw.go.kr/board.es?mid=a10501010100&bid=0003&nPage={page}"
@@ -156,7 +174,7 @@ def collect_mohw_notice():
         print(f"   -> {page}페이지 탐색 중...")
 
         try:
-            res = requests.get(url, verify=False, timeout=90)
+            res = fetch(url)
             soup = BeautifulSoup(res.text, 'html.parser')
             rows = soup.select('table.tstyle_list tbody tr')
             if not rows:
@@ -183,7 +201,7 @@ def collect_mohw_notice():
                         count += 1
 
             if reached_cutoff:
-                print(f"   🏁 1년 전 기준일({cutoff_date_str}) 도달 완료.")
+                print(f"   🏁 기준일({cutoff_date_str}) 도달 완료.")
                 break
 
         except Exception as e:
@@ -191,20 +209,20 @@ def collect_mohw_notice():
             break
 
         page += 1
-        time.sleep(0.5)
+        time.sleep(1.5)
 
     print(f"   👉 보건복지부(공지) 신규 저장: {count}건")
     return count
 
 
 # ==============================================================================
-# [3] 메디컬타임즈 1년 치 수집
+# [3] 메디컬타임즈
 # ==============================================================================
 def collect_medicaltimes():
-    print("\n🔍 [3/5 메디컬타임즈] 1년 치 수집 시작...")
+    print("\n🔍 [3/5 메디컬타임즈] 수집 시작...")
     count = 0
     page = 1
-    max_pages = 100
+    max_pages = MAX_PAGES
 
     while page <= max_pages:
         target_url = f"https://www.medicaltimes.com/Main/News/List.html?page={page}"
@@ -212,7 +230,7 @@ def collect_medicaltimes():
         print(f"   -> {page}페이지 탐색 중...")
 
         try:
-            res = requests.get(url, verify=False, timeout=90)
+            res = fetch(url)
             soup = BeautifulSoup(res.text, 'html.parser')
             items = soup.select('article.newsList_cont')
             if not items:
@@ -238,7 +256,7 @@ def collect_medicaltimes():
                         count += 1
 
             if reached_cutoff:
-                print(f"   🏁 1년 전 기준일({cutoff_date_str}) 도달 완료.")
+                print(f"   🏁 기준일({cutoff_date_str}) 도달 완료.")
                 break
 
         except Exception as e:
@@ -246,20 +264,20 @@ def collect_medicaltimes():
             break
 
         page += 1
-        time.sleep(0.5)
+        time.sleep(1.5)
 
     print(f"   👉 메디컬타임즈 신규 저장: {count}건")
     return count
 
 
 # ==============================================================================
-# [4] 데일리메디 1년 치 수집
+# [4] 데일리메디
 # ==============================================================================
 def collect_dailymedi():
-    print("\n🔍 [4/5 데일리메디] 1년 치 수집 시작...")
+    print("\n🔍 [4/5 데일리메디] 수집 시작...")
     count = 0
     page = 1
-    max_pages = 100
+    max_pages = MAX_PAGES
 
     while page <= max_pages:
         target_url = f"https://www.dailymedi.com/news/news_list.php?ca_id=22&page={page}"
@@ -267,7 +285,7 @@ def collect_dailymedi():
         print(f"   -> {page}페이지 탐색 중...")
 
         try:
-            res = requests.get(url, verify=False, timeout=90)
+            res = fetch(url)
             soup = BeautifulSoup(res.text, 'html.parser')
             items = soup.select('.listNews li')
             if not items:
@@ -295,7 +313,7 @@ def collect_dailymedi():
                         count += 1
 
             if reached_cutoff:
-                print(f"   🏁 1년 전 기준일({cutoff_date_str}) 도달 완료.")
+                print(f"   🏁 기준일({cutoff_date_str}) 도달 완료.")
                 break
 
         except Exception as e:
@@ -303,20 +321,20 @@ def collect_dailymedi():
             break
 
         page += 1
-        time.sleep(0.5)
+        time.sleep(1.5)
 
     print(f"   👉 데일리메디 신규 저장: {count}건")
     return count
 
 
 # ==============================================================================
-# [5] 청년의사 1년 치 수집
+# [5] 청년의사
 # ==============================================================================
 def collect_docdocdoc():
-    print("\n🔍 [5/5 청년의사] 1년 치 수집 시작...")
+    print("\n🔍 [5/5 청년의사] 수집 시작...")
     count = 0
     page = 1
-    max_pages = 100
+    max_pages = MAX_PAGES
 
     while page <= max_pages:
         target_url = f"https://www.docdocdoc.co.kr/news/articleList.html?view_type=sm&page={page}"
@@ -324,7 +342,7 @@ def collect_docdocdoc():
         print(f"   -> {page}페이지 탐색 중...")
 
         try:
-            res = requests.get(url, verify=False, timeout=90)
+            res = fetch(url)
             soup = BeautifulSoup(res.text, 'html.parser')
             items = soup.select('#section-list > ul.type2 > li')
             if not items:
@@ -351,7 +369,7 @@ def collect_docdocdoc():
                         count += 1
 
             if reached_cutoff:
-                print(f"   🏁 1년 전 기준일({cutoff_date_str}) 도달 완료.")
+                print(f"   🏁 기준일({cutoff_date_str}) 도달 완료.")
                 break
 
         except Exception as e:
@@ -359,7 +377,7 @@ def collect_docdocdoc():
             break
 
         page += 1
-        time.sleep(0.5)
+        time.sleep(1.5)
 
     print(f"   👉 청년의사 신규 저장: {count}건")
     return count
@@ -369,7 +387,7 @@ def collect_docdocdoc():
 # [메인 실행부]
 # ==============================================================================
 if __name__ == "__main__":
-    print("🚀 보건복지부(보도자료/공지) + 3대 전문언론 1개년 기사 일괄 수집 작업을 시작합니다...")
+    print("🚀 보건복지부(보도자료/공지) + 3대 전문언론 기사 수집을 시작합니다...")
     start_time = time.time()
 
     total = (
@@ -382,5 +400,5 @@ if __name__ == "__main__":
 
     elapsed = round(time.time() - start_time, 1)
     print("\n" + "=" * 65)
-    print(f"🎉 1개년 수집 완료: 총 {total}개의 신규 기사가 구글 시트에 등록되었습니다! (소요 시간: {elapsed}초)")
+    print(f"🎉 수집 완료: 총 {total}개의 신규 기사가 구글 시트에 등록되었습니다! (소요 시간: {elapsed}초)")
     print("=" * 65)

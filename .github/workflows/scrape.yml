@@ -2,9 +2,16 @@ name: Daily Medical News Collector
 
 on:
   schedule:
-    # 매일 한국 시간 오전 6시 (UTC 21:00) 자동 실행
-    - cron: '0 21 * * *'
-  workflow_dispatch: # 수동 즉시 실행 지원
+    # 매일 한국 시간 오전 6시·오후 1시 (UTC 21:00, 04:00) 자동 실행
+    - cron: '0 21,4 * * *'
+  workflow_dispatch: # 수동 즉시 실행 (과거 기사 보충 시 값을 크게)
+    inputs:
+      days:
+        description: '며칠 전 기사까지 모을지'
+        default: '3'
+      max_pages:
+        description: '소스별 최대 페이지 수'
+        default: '10'
 
 jobs:
   scrape:
@@ -27,5 +34,7 @@ jobs:
         env:
           GOOGLE_SHEET_WEBHOOK_URL: ${{ secrets.GOOGLE_SHEET_WEBHOOK_URL }}
           SCRAPER_API_KEY: ${{ secrets.SCRAPER_API_KEY }}
+          COLLECT_DAYS: ${{ inputs.days }}
+          MAX_PAGES: ${{ inputs.max_pages }}
         run: |
           python news.py
