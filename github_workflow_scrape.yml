@@ -1,0 +1,31 @@
+name: Daily Medical News Collector
+
+on:
+  schedule:
+    # 매일 한국 시간 오전 6시 (UTC 21:00) 자동 실행
+    - cron: '0 21 * * *'
+  workflow_dispatch: # 수동 즉시 실행 지원
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run Collector
+        env:
+          GOOGLE_SHEET_WEBHOOK_URL: ${{ secrets.GOOGLE_SHEET_WEBHOOK_URL }}
+          SCRAPER_API_KEY: ${{ secrets.SCRAPER_API_KEY }}
+        run: |
+          python news.py
