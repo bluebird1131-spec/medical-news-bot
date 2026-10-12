@@ -104,6 +104,17 @@ def fetch(url, tries=3):
     raise RuntimeError("여러 번 시도했지만 페이지를 받지 못했습니다")
 
 
+def mohw_full_title(link):
+    # 복지부 목록은 긴 제목을 ".."로 자르므로 글 본문 페이지의 제목(board_view h2.title)을 씀 (하루 몇 건)
+    try:
+        res = fetch(link, tries=2)  # 복지부는 해외에서도 바로 열려 ScraperAPI 한도를 쓰지 않음
+        h2 = BeautifulSoup(res.text, 'html.parser').select_one('.board_view h2.title')
+        return h2.get_text(" ", strip=True) if h2 else ""
+    except Exception as e:
+        print(f"   ⚠️ 전체 제목 가져오기 실패: {str(e)[:80]}")
+        return ""
+
+
 # ==============================================================================
 # [1] 보건복지부 [보도자료] (bid=0027)
 # ==============================================================================
@@ -143,6 +154,9 @@ def collect_mohw_press():
                     title = a_tag.get_text(strip=True).replace('새글', '').strip()
                     href = a_tag['href']
                     link = href if href.startswith("http") else "https://www.mohw.go.kr" + href
+                    link = re.sub(r'nPage=\d+', 'nPage=1', link)
+                    if title.endswith('..'):
+                        title = mohw_full_title(link) or title
                     if send_to_google_sheet(title, link, date_text, "보건복지부(보도자료)") == "success":
                         count += 1
 
@@ -199,6 +213,9 @@ def collect_mohw_notice():
                     title = a_tag.get_text(strip=True).replace('새글', '').strip()
                     href = a_tag['href']
                     link = href if href.startswith("http") else "https://www.mohw.go.kr" + href
+                    link = re.sub(r'nPage=\d+', 'nPage=1', link)
+                    if title.endswith('..'):
+                        title = mohw_full_title(link) or title
                     if send_to_google_sheet(title, link, date_text, "보건복지부(공지)") == "success":
                         count += 1
 
@@ -311,6 +328,7 @@ def collect_dailymedi():
                     a_tag = item.select_one('a')
                     if not a_tag or 'href' not in a_tag.attrs: continue
                     link = "https://www.dailymedi.com/news/" + a_tag['href'].replace('./', '')
+                    link = re.sub(r'&page=\d+', '', link)
                     if send_to_google_sheet(title, link, date_text, "데일리메디") == "success":
                         count += 1
 
