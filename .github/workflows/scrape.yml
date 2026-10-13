@@ -2,8 +2,9 @@ name: Daily Medical News Collector
 
 on:
   schedule:
-    # 매일 한국 시간 오전 6시·오후 1시 (UTC 21:00, 04:00) 자동 실행
-    - cron: '0 21,4 * * *'
+    # 주 실행은 Cloudflare Worker 예약(06:10·13:10 KST, workflow_dispatch). GitHub 예약은 몇 시간씩 밀리거나 빠져서 예비로만 둠
+    # 07:40·14:40 KST (UTC 22:40, 05:40) — 최근 3시간 안에 실행이 있었으면 건너뜀
+    - cron: '40 22,5 * * *'
   workflow_dispatch: # 수동 즉시 실행 (과거 기사 보충 시 값을 크게)
     inputs:
       days:
@@ -13,24 +14,49 @@ on:
         description: '소스별 최대 페이지 수'
         default: '10'
 
+# 두 실행이 겹치면 같은 기사를 두 번 넣을 수 있어 차례로 실행
+concurrency:
+  group: scrape
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
 jobs:
   scrape:
     runs-on: ubuntu-latest
 
     steps:
+      - name: 최근 실행 확인 (예비 예약 실행만)
+        id: chk
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          since=$(date -u -d '3 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+          n=$(gh api "repos/${{ github.repository }}/actions/workflows/scrape.yml/runs?per_page=10" \
+            --jq "[.workflow_runs[] | select(.id != ${{ github.run_id }} and .created_at >= \"$since\" and .conclusion != \"failure\" and .conclusion != \"cancelled\")] | length")
+          echo "최근 3시간 실행: $n건"
+          if [ "$n" -gt 0 ]; then echo "skip=true" >> "$GITHUB_OUTPUT"; fi
+
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        if: steps.chk.outputs.skip != 'true'
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        if: steps.chk.outputs.skip != 'true'
+        uses: actions/setup-python@v6
         with:
           python-version: '3.10'
 
       - name: Install Dependencies
+        if: steps.chk.outputs.skip != 'true'
         run: |
           pip install -r requirements.txt
 
       - name: Run Collector
+        if: steps.chk.outputs.skip != 'true'
         env:
           GOOGLE_SHEET_WEBHOOK_URL: ${{ secrets.GOOGLE_SHEET_WEBHOOK_URL }}
           SCRAPER_API_KEY: ${{ secrets.SCRAPER_API_KEY }}
