@@ -9,6 +9,8 @@ import os
 import time
 import re
 import xml.etree.ElementTree as ET
+import csv
+import io
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -20,6 +22,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # ==============================================================================
 GOOGLE_SHEET_WEBHOOK_URL = os.environ.get("GOOGLE_SHEET_WEBHOOK_URL")  # 👈 구글 시트 웹앱 URL
 SCRAPER_API_KEY = os.environ.get("SCRAPER_API_KEY")                    # 👈 ScraperAPI 키
+SHEET_URL = os.environ.get("SHEET_URL")                                # 👈 시트 주소 (이미 있는 기사 주소를 한 번에 읽는 용도, 선택)
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -40,9 +43,41 @@ print("=" * 65)
 
 
 # ==============================================================================
+# [이미 시트에 있는 기사 주소] - 시작할 때 시트를 CSV로 한 번 읽어 둠
+#   기사마다 웹앱에 보내 중복을 확인하면 1건에 3~4초씩 걸려 실행 시간(비공개 저장소 무료 한도)을 많이 씀
+#   → 이미 있는 주소는 보내지 않고 건너뜀. 시트를 못 읽으면 예전처럼 모두 보내고 웹앱이 중복을 거름
+# ==============================================================================
+def load_known_links():
+    m = re.search(r'/spreadsheets/d/([\w-]+)', SHEET_URL or '')
+    if not m:
+        print("ℹ️ SHEET_URL 이 없어 기사마다 웹앱으로 중복을 확인합니다.")
+        return set()
+    gid = re.search(r'[#&?]gid=(\d+)', SHEET_URL)
+    url = f"https://docs.google.com/spreadsheets/d/{m.group(1)}/export?format=csv" + (f"&gid={gid.group(1)}" if gid else "")
+    try:
+        res = requests.get(url, timeout=60)
+        rows = list(csv.reader(io.StringIO(res.content.decode('utf-8-sig'))))
+        col = next(i for i, h in enumerate(rows[0]) if re.search(r'url|링크|주소', h, re.I) and not re.search(r'사진|이미지', h))
+        links = {r[col].strip() for r in rows[1:] if len(r) > col and r[col].strip()}
+        print(f"✅ 시트에 이미 있는 기사 주소 {len(links)}건을 읽었습니다.")
+        return links
+    except Exception as e:
+        print(f"⚠️ 시트를 읽지 못해 기사마다 웹앱으로 중복을 확인합니다: {str(e)[:120]}")
+        return set()
+
+
+KNOWN = load_known_links()
+known_skip = 0
+
+
+# ==============================================================================
 # [구글 시트 전송 함수]
 # ==============================================================================
 def send_to_google_sheet(title, link, pub_date, source):
+    global known_skip
+    if link in KNOWN:
+        known_skip += 1
+        return "duplicate"
     if not GOOGLE_SHEET_WEBHOOK_URL:
         print("   🚨 [설정 오류] GOOGLE_SHEET_WEBHOOK_URL 환경변수가 설정되지 않았습니다.")
         return "no_webhook"
@@ -69,6 +104,7 @@ def send_to_google_sheet(title, link, pub_date, source):
         res_json = res.json()
         if res_json.get("status") == "success":
             print(f"   ㄴ [저장 완료] ({formatted_date}) {title[:40]}...")
+            KNOWN.add(link)
             return "success"
         elif res_json.get("status") == "duplicate":
             print(f"   ㄴ [중복 스킵] 이미 시트에 존재하는 기사입니다.")
@@ -155,7 +191,7 @@ def collect_mohw_press():
                     href = a_tag['href']
                     link = href if href.startswith("http") else "https://www.mohw.go.kr" + href
                     link = re.sub(r'nPage=\d+', 'nPage=1', link)
-                    if title.endswith('..'):
+                    if title.endswith('..') and link not in KNOWN:
                         title = mohw_full_title(link) or title
                     if send_to_google_sheet(title, link, date_text, "보건복지부(보도자료)") == "success":
                         count += 1
@@ -392,4 +428,5 @@ if __name__ == "__main__":
     elapsed = round(time.time() - start_time, 1)
     print("\n" + "=" * 65)
     print(f"🎉 수집 완료: 총 {total}개의 신규 기사가 구글 시트에 등록되었습니다! (소요 시간: {elapsed}초)")
+    print(f"   (시트에 이미 있어 보내지 않은 기사: {known_skip}건)")
     print("=" * 65)

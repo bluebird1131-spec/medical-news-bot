@@ -74,6 +74,7 @@ jobs:
         env:
           GOOGLE_SHEET_WEBHOOK_URL: ${{ secrets.GOOGLE_SHEET_WEBHOOK_URL }}
           SCRAPER_API_KEY: ${{ secrets.SCRAPER_API_KEY }}
+          SHEET_URL: ${{ secrets.SHEET_URL }}   # 이미 있는 기사 주소를 한 번에 읽어 중복 전송을 줄임
           COLLECT_DAYS: ${{ inputs.days }}
           MAX_PAGES: ${{ inputs.max_pages }}
         run: |
